@@ -1,0 +1,56 @@
+import signal
+import os
+import time
+import threading
+import sys
+
+# Import these from your SIEM if available
+def log_security_event(event_type, message):
+    print(f"Logging event: {event_type} - {message}")
+
+def send_popup_alert(message):
+    print(f"Alert: {message}")
+
+def restart_networking():
+    try:
+        log_security_event("NETWORK_RESTART", "Manual network restart triggered.")
+        send_popup_alert("Manual network restart triggered.")
+        os.system("nmcli networking on")
+        os.system("systemctl restart NetworkManager")
+        os.system("iptables -P OUTPUT ACCEPT")
+    except Exception as e:
+        log_security_event("NETWORK_RESTART_ERROR", f"Failed to restart networking: {e}")
+
+def monitor_restart_flag(flag_path="~/Desktop/SIEM/restart_network.flag", interval=5):
+    flag_path = os.path.expanduser(flag_path)
+    print(f"🟢 Monitoring for network restart flag at {flag_path}")
+    while True:
+        try:
+            if os.path.exists(flag_path):
+                print("🔄 Restart flag detected, restarting networking...")
+                restart_networking()
+                os.remove(flag_path)
+        except Exception as e:
+            log_security_event("RESTART_FLAG_ERROR", f"Error monitoring flag: {e}")
+        time.sleep(interval)
+
+def handle_unlock_signal(signum, frame):
+    print("🔓 SIGUSR1 received, restarting networking...")
+    restart_networking()
+
+def check_root():
+    if os.geteuid() != 0:
+        print("⚠️  Warning: This script should be run as root for full functionality.")
+
+if __name__ == "__main__":
+    check_root()
+    signal.signal(signal.SIGUSR1, handle_unlock_signal)
+    restart_thread = threading.Thread(target=monitor_restart_flag, daemon=True)
+    restart_thread.start()
+    print("🟢 Network restart monitor running. Press Ctrl+C to exit.")
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        print("🛑 Exiting network restart monitor.")
+        sys.exit(0)

@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: siem
+  namespace: default
+  labels:
+    app: siem
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app: siem
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        app: siem
+    spec:
+      containers:
+      - name: siem
+        image: siem-app:latest
+        imagePullPolicy: Never
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        stdin: true
+        tty: true
+        volumeMounts:
+        - name: siem-data
+          mountPath: /app/db
+      volumes:
+      - name: siem-data
+        hostPath:
+          path: /home/blackhawk63/Desktop/SIEM/Modules/db
+          type: DirectoryOrCreate
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
