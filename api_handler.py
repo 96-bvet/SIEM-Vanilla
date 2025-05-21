@@ -3,14 +3,27 @@ import requests
 import json
 import datetime
 import os
+import logging
+import time
 from dotenv import load_dotenv
-from tqdm import tqdm  # Progress bar
+from tqdm import tqdm
+
+try:
+    from plyer import notification
+    HAS_PLYER = True
+except ImportError:
+    HAS_PLYER = False
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
 # Load the .env file from a cross-platform path
-BASE_DIR = os.path.expanduser(os.path.join("~", "Desktop", "SIEM"))
+load_dotenv()
+BASE_DIR = os.getenv("BASE_DIR", os.path.expanduser(os.path.join("~", "Desktop", "SIEM")))
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
 ENV_FILE = os.path.join(CONFIG_DIR, ".env")
-load_dotenv(dotenv_path=ENV_FILE)
+if os.path.exists(ENV_FILE):
+    load_dotenv(dotenv_path=ENV_FILE)
 
 # Load API keys from environment variables
 ALIENVAULT_API = os.getenv("ALIENVAULT_API")
@@ -18,21 +31,38 @@ IPINFO_API = os.getenv("IPINFO_API")
 MALWAREBAZAAR_API = os.getenv("MALWAREBAZAAR_API")
 DSHIELD_API = os.getenv("DSHIELD_API")
 
+# Configurable severity threshold
+SEVERITY_THRESHOLD = int(os.getenv("SEVERITY_THRESHOLD", 75))
+
 # Cross-platform database path
 DB_FILE = os.path.join(BASE_DIR, "db", "siem.db")
-
-# Ensure the directory exists before connecting
 os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-
-# Path for JSON threat data storage
 THREAT_JSON_FILE = os.path.join(BASE_DIR, "db", "threats.json")
 
-# Initialize database
+def safe_request(method, url, retries=3, timeout=15, **kwargs):
+    """Make a safe HTTP request with retries and timeout."""
+    for attempt in range(retries):
+        try:
+            response = method(url, timeout=timeout, **kwargs)
+            return response
+        except requests.RequestException as e:
+            logging.warning(f"Request error: {e}. Retrying ({attempt+1}/{retries})...")
+            time.sleep(2)
+    logging.error(f"Failed to fetch {url} after {retries} attempts.")
+    return None
+
+def notify_user(message):
+    """Cross-platform notification."""
+    if HAS_PLYER:
+        notification.notify(title="SIEM Alert", message=message)
+    else:
+        logging.warning("plyer not installed, falling back to print for notifications.")
+        print(f"NOTIFY: {message}")
+
 def initialize_db():
     """Creates tables for storing known threats."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS threats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,17 +76,15 @@ def initialize_db():
         result TEXT
     );
     """)
-
     conn.commit()
     conn.close()
 
 initialize_db()
 
-# Store threat intelligence results in DB and JSON
 def save_to_db_and_json(api_name, query, result, threat_type="Unknown", severity=1, description=""):
     """Stores threat intelligence results in the database and JSON file if they are new."""
     # Save to DB (only high-risk threats)
-    if severity >= 75:
+    if severity >= SEVERITY_THRESHOLD:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM threats WHERE query=?", (query,))
@@ -98,7 +126,6 @@ def save_to_db_and_json(api_name, query, result, threat_type="Unknown", severity
         with open(THREAT_JSON_FILE, "w") as f:
             json.dump(data, f, indent=2)
 
-# Search for stored threat data
 def search_stored_threat(query):
     """Search for stored threat data in the database."""
     conn = sqlite3.connect(DB_FILE)
@@ -108,14 +135,12 @@ def search_stored_threat(query):
     conn.close()
     return result[0] if result else None
 
-# Real-Time Alerts for Critical Threats
 def alert_critical_threat(threat):
     """Alert user about critical threats (risk ≥ 90)."""
     message = f"⚠️ CRITICAL THREAT DETECTED: {threat['indicator']} ({threat['description']})"
-    os.system(f'notify-send "{message}"')
+    notify_user(message)
     print(message)
 
-# Threat Intelligence Handlers
 class ThreatIntelligence:
 
     @staticmethod
@@ -129,8 +154,8 @@ class ThreatIntelligence:
         headers = {"API-KEY": MALWAREBAZAAR_API}
         payload = {"query": "get_info", "hash": hash_value}
 
-        response = requests.post(url, headers=headers, data=payload)
-        result = response.json() if response.status_code == 200 else "Error fetching malware hash."
+        response = safe_request(requests.post, url, headers=headers, data=payload)
+        result = response.json() if response and response.status_code == 200 else "Error fetching malware hash."
 
         save_to_db_and_json(
             api_name="MalwareBazaar",
@@ -150,9 +175,9 @@ class ThreatIntelligence:
         payload = {"query": "get_recent"}
 
         try:
-            response = requests.post(url, headers=headers, data=payload)
+            response = safe_request(requests.post, url, headers=headers, data=payload)
             count = 0
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 results = response.json()
                 data = results.get("data", [])
                 for entry in data:
@@ -168,10 +193,10 @@ class ThreatIntelligence:
                     )
                     count += 1
             else:
-                print("❌ Failed to download MalwareBazaar hashes.")
+                logging.error("❌ Failed to download MalwareBazaar hashes.")
             return count
         except Exception as e:
-            print(f"❌ Error fetching MalwareBazaar: {e}")
+            logging.error(f"❌ Error fetching MalwareBazaar: {e}")
             return 0
 
     @staticmethod
@@ -179,9 +204,9 @@ class ThreatIntelligence:
         """Download DShield blocklist and save to DB/JSON"""
         url = "https://isc.sans.edu/api/threatlist/dshieldblocklist"
         try:
-            response = requests.get(url)
+            response = safe_request(requests.get, url)
             count = 0
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 blocklist = response.text.splitlines()
                 for ip in blocklist:
                     save_to_db_and_json(
@@ -194,10 +219,10 @@ class ThreatIntelligence:
                     )
                     count += 1
             else:
-                print("❌ Failed to download DShield blocklist.")
+                logging.error("❌ Failed to download DShield blocklist.")
             return count
         except Exception as e:
-            print(f"❌ Error fetching DShield: {e}")
+            logging.error(f"❌ Error fetching DShield: {e}")
             return 0
 
     @staticmethod
@@ -205,9 +230,9 @@ class ThreatIntelligence:
         """Download AlienVault IP reputation data and save to DB/JSON"""
         url = "https://reputation.alienvault.com/reputation.data"
         try:
-            response = requests.get(url)
+            response = safe_request(requests.get, url)
             count = 0
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 lines = response.text.splitlines()
                 for line in lines:
                     if line.startswith("#") or not line.strip():
@@ -223,10 +248,10 @@ class ThreatIntelligence:
                     )
                     count += 1
             else:
-                print("❌ Failed to download AlienVault reputation data.")
+                logging.error("❌ Failed to download AlienVault reputation data.")
             return count
         except Exception as e:
-            print(f"❌ Error fetching AlienVault: {e}")
+            logging.error(f"❌ Error fetching AlienVault: {e}")
             return 0
 
     @staticmethod
@@ -235,8 +260,8 @@ class ThreatIntelligence:
         url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
         count = 0
         try:
-            response = requests.get(url, timeout=30)
-            if response.status_code == 200:
+            response = safe_request(requests.get, url, timeout=30)
+            if response and response.status_code == 200:
                 kev_data = response.json()
                 vulnerabilities = kev_data.get("vulnerabilities", [])
                 for vuln in vulnerabilities:
@@ -256,12 +281,11 @@ class ThreatIntelligence:
                     )
                     count += 1
             else:
-                print("❌ Failed to download CISA KEV vulnerabilities.")
+                logging.error("❌ Failed to download CISA KEV vulnerabilities.")
         except Exception as e:
-            print(f"❌ Error fetching CISA KEV: {e}")
+            logging.error(f"❌ Error fetching CISA KEV: {e}")
         return count
 
-# Example Usage:
 if __name__ == "__main__":
     handler = ThreatIntelligence()
     fetch_functions = [
@@ -271,11 +295,11 @@ if __name__ == "__main__":
         ("CISA KEV", handler.fetch_cisa_kev)
     ]
 
-    print("⬇️  Fetching threat intelligence updates...")
+    logging.info("⬇️  Fetching threat intelligence updates...")
     total_sources = len(fetch_functions)
     with tqdm(total=total_sources, desc="Overall Progress", unit="source") as pbar:
         for name, func in fetch_functions:
             count = func()
-            print(f"{name}: {count} items processed.")
+            logging.info(f"{name}: {count} items processed.")
             pbar.update(1)
-    print("✅ All threat intelligence sources updated.")
+    logging.info("✅ All threat intelligence sources updated.")
