@@ -5,9 +5,10 @@ import subprocess
 import db_setup  # ✅ Automatically initializes the database
 
 # Adjust the import path for Modules directory
-module_path = os.path.expanduser("~/Desktop/SIEM/Modules")
-if module_path not in sys.path:
-    sys.path.append(module_path)
+BASE_DIR = os.path.expanduser(os.path.join("~", "Desktop", "SIEM"))
+MODULES_DIR = os.path.join(BASE_DIR, "Modules")
+if MODULES_DIR not in sys.path:
+    sys.path.append(MODULES_DIR)
 
 from user_auth import UserAuth
 from api_handler import ThreatIntelligence
@@ -19,9 +20,10 @@ from alerts import (
     load_blacklisted_ips
 )
 
-DB_FILE = os.path.expanduser("~/Desktop/SIEM/db/siem.db")
-SECURITY_ALERTS_FILE = os.path.expanduser("~/Desktop/SIEM/security_alerts.json")
-USER_LOG_FILE = os.path.expanduser("~/Desktop/SIEM/user_log.json")
+# Cross-platform paths
+DB_FILE = os.path.join(BASE_DIR, "db", "siem.db")
+SECURITY_ALERTS_FILE = os.path.join(BASE_DIR, "security_alerts.json")
+USER_LOG_FILE = os.path.join(BASE_DIR, "user_log.json")
 
 def register_user_prompt():
     print("\n--- Register New User ---")

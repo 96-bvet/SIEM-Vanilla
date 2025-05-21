@@ -11,11 +11,17 @@ from collections import deque
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# Corrected path for security alerts
-SECURITY_ALERTS_FILE = os.path.expanduser("~/Desktop/SIEM/security_alerts.json")
-DB_FILE = os.path.expanduser("~/Desktop/SIEM/db/siem.db")
+# Cross-platform paths for security alerts and database
+BASE_DIR = os.path.expanduser(os.path.join("~", "Desktop", "SIEM"))
+SECURITY_ALERTS_FILE = os.path.join(BASE_DIR, "security_alerts.json")
+DB_FILE = os.path.join(BASE_DIR, "db", "siem.db")
 
-IGNORED_FILE_PATTERNS = ["/var/log/", "/tmp/", "/run/"]
+# Adjust ignored file patterns to be cross-platform
+IGNORED_FILE_PATTERNS = [
+    os.path.join("var", "log"),
+    os.path.join("tmp"),
+    os.path.join("run"),
+]
 ALERTED_PROCESSES = set()
 RECENTLY_ALERTED_FILES = {}
 ALERT_SUPPRESS_SECONDS = 10  # Suppress duplicate alerts for the same file within this window
@@ -28,21 +34,21 @@ def log_security_event(alert_type, message):
     log_entry = {"timestamp": timestamp, "alert_type": alert_type, "message": message}
 
     with log_lock:
-        if not os.path.exists(SECURITY_ALERTS_FILE):
-            with open(SECURITY_ALERTS_FILE, "w") as file:
-                json.dump([], file)  # Initialize empty JSON list
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(SECURITY_ALERTS_FILE), exist_ok=True)
+        try:
+            if os.path.exists(SECURITY_ALERTS_FILE):
+                with open(SECURITY_ALERTS_FILE, "r") as f:
+                    data = json.load(f)
+            else:
+                data = []
 
-        with open(SECURITY_ALERTS_FILE, "r+") as file:
-            try:
-                logs = json.load(file)
-            except Exception:
-                logs = []
-            logs.append(log_entry)
-            file.seek(0)
-            json.dump(logs, file, indent=4)
-            file.truncate()  # Ensure old content is removed
+            data.append(log_entry)
 
-    print(f"🚨 Security Log: [{alert_type}] - {message}")
+            with open(SECURITY_ALERTS_FILE, "w") as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"Error logging security event: {e}")
 
 def send_popup_alert(message):
     """Triggers a pop-up security notification."""

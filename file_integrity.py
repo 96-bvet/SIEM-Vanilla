@@ -4,7 +4,11 @@ import os
 import datetime
 from alerts import send_popup_alert
 
-DB_FILE = "db/siem.db"
+# Cross-platform database path
+BASE_DIR = os.path.expanduser(os.path.join("~", "Desktop", "SIEM"))
+DB_FILE = os.path.join(BASE_DIR, "db", "siem.db")
+
+# Ensure the directory exists before connecting
 os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
 
 def initialize_db():
@@ -60,7 +64,7 @@ def store_baseline_hashes(files=None):
                 cursor.execute("INSERT OR REPLACE INTO integrity_baseline (file_path, baseline_hash) VALUES (?, ?)",
                                (file, file_hash))
             else:
-                print(f"⚠️ Skipped {file}: Unable to compute hash.")
+                print(f"⚠��� Skipped {file}: Unable to compute hash.")
 
         conn.commit()
         conn.close()

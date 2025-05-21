@@ -6,8 +6,11 @@ import os
 from dotenv import load_dotenv
 from tqdm import tqdm  # Progress bar
 
-# Load the .env file from the specified path
-load_dotenv(dotenv_path="/home/blackhawk63/Desktop/SIEM/config/.env")
+# Load the .env file from a cross-platform path
+BASE_DIR = os.path.expanduser(os.path.join("~", "Desktop", "SIEM"))
+CONFIG_DIR = os.path.join(BASE_DIR, "config")
+ENV_FILE = os.path.join(CONFIG_DIR, ".env")
+load_dotenv(dotenv_path=ENV_FILE)
 
 # Load API keys from environment variables
 ALIENVAULT_API = os.getenv("ALIENVAULT_API")
@@ -15,13 +18,14 @@ IPINFO_API = os.getenv("IPINFO_API")
 MALWAREBAZAAR_API = os.getenv("MALWAREBAZAAR_API")
 DSHIELD_API = os.getenv("DSHIELD_API")
 
-DB_FILE = "db/siem.db"  # or whatever your DB path is
+# Cross-platform database path
+DB_FILE = os.path.join(BASE_DIR, "db", "siem.db")
 
 # Ensure the directory exists before connecting
 os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
 
 # Path for JSON threat data storage
-THREAT_JSON_FILE = os.path.expanduser("~/Desktop/SIEM/db/threats.json")
+THREAT_JSON_FILE = os.path.join(BASE_DIR, "db", "threats.json")
 
 # Initialize database
 def initialize_db():
