@@ -89,16 +89,14 @@ def save_to_db_and_json(api_name, query, result, threat_type="Unknown", severity
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM threats WHERE query=?", (query,))
         existing_entry = cursor.fetchone()
-        if existing_entry:
-            conn.close()
-        else:
+        if not existing_entry:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
             INSERT INTO threats (query, threat_type, severity, source, api_name, last_seen, description, result)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (query, threat_type, severity, api_name, api_name, timestamp, description, result))
             conn.commit()
-            conn.close()
+        conn.close()
 
     # Save to JSON (all threats)
     threat_entry = {
@@ -139,13 +137,27 @@ def alert_critical_threat(threat):
     """Alert user about critical threats (risk ≥ 90)."""
     message = f"⚠️ CRITICAL THREAT DETECTED: {threat['indicator']} ({threat['description']})"
     notify_user(message)
-    print(message)
+    logging.critical(message)
+
+def validate_api_keys():
+    """Ensure all required API keys are set."""
+    missing = []
+    if not MALWAREBAZAAR_API:
+        missing.append("MALWAREBAZAAR_API")
+    # Add checks for other APIs if needed
+    if missing:
+        logging.error(f"Missing API keys: {', '.join(missing)}")
+        return False
+    return True
 
 class ThreatIntelligence:
+    """Threat intelligence fetchers and checkers."""
 
     @staticmethod
     def check_malware_hash(hash_value):
-        """Check malware hash reputation on MalwareBazaar"""
+        """Check malware hash reputation on MalwareBazaar."""
+        if not validate_api_keys():
+            return "API key missing."
         stored_result = search_stored_threat(hash_value)
         if stored_result:
             return stored_result
@@ -169,7 +181,9 @@ class ThreatIntelligence:
 
     @staticmethod
     def fetch_malwarebazaar_bulk():
-        """Download bulk malware hashes from MalwareBazaar and save to DB/JSON"""
+        """Download bulk malware hashes from MalwareBazaar and save to DB/JSON."""
+        if not validate_api_keys():
+            return 0
         url = "https://mb-api.abuse.ch/api/v1/"
         headers = {"API-KEY": MALWAREBAZAAR_API}
         payload = {"query": "get_recent"}
@@ -180,7 +194,7 @@ class ThreatIntelligence:
             if response and response.status_code == 200:
                 results = response.json()
                 data = results.get("data", [])
-                for entry in data:
+                for entry in tqdm(data, desc="MalwareBazaar", unit="hash"):
                     hash_value = entry.get("sha256_hash")
                     description = entry.get("file_type")
                     save_to_db_and_json(
@@ -193,22 +207,22 @@ class ThreatIntelligence:
                     )
                     count += 1
             else:
-                logging.error("❌ Failed to download MalwareBazaar hashes.")
+                logging.error("Failed to download MalwareBazaar hashes.")
             return count
         except Exception as e:
-            logging.error(f"❌ Error fetching MalwareBazaar: {e}")
+            logging.error(f"Error fetching MalwareBazaar: {e}")
             return 0
 
     @staticmethod
     def fetch_dshield_blocklist():
-        """Download DShield blocklist and save to DB/JSON"""
+        """Download DShield blocklist and save to DB/JSON."""
         url = "https://isc.sans.edu/api/threatlist/dshieldblocklist"
         try:
             response = safe_request(requests.get, url)
             count = 0
             if response and response.status_code == 200:
                 blocklist = response.text.splitlines()
-                for ip in blocklist:
+                for ip in tqdm(blocklist, desc="DShield", unit="ip"):
                     save_to_db_and_json(
                         api_name="DShield",
                         query=ip,
@@ -219,22 +233,22 @@ class ThreatIntelligence:
                     )
                     count += 1
             else:
-                logging.error("❌ Failed to download DShield blocklist.")
+                logging.error("Failed to download DShield blocklist.")
             return count
         except Exception as e:
-            logging.error(f"❌ Error fetching DShield: {e}")
+            logging.error(f"Error fetching DShield: {e}")
             return 0
 
     @staticmethod
     def fetch_alienvault_reputation():
-        """Download AlienVault IP reputation data and save to DB/JSON"""
+        """Download AlienVault IP reputation data and save to DB/JSON."""
         url = "https://reputation.alienvault.com/reputation.data"
         try:
             response = safe_request(requests.get, url)
             count = 0
             if response and response.status_code == 200:
                 lines = response.text.splitlines()
-                for line in lines:
+                for line in tqdm(lines, desc="AlienVault", unit="ip"):
                     if line.startswith("#") or not line.strip():
                         continue
                     ip = line.split()[0]
@@ -248,15 +262,15 @@ class ThreatIntelligence:
                     )
                     count += 1
             else:
-                logging.error("❌ Failed to download AlienVault reputation data.")
+                logging.error("Failed to download AlienVault reputation data.")
             return count
         except Exception as e:
-            logging.error(f"❌ Error fetching AlienVault: {e}")
+            logging.error(f"Error fetching AlienVault: {e}")
             return 0
 
     @staticmethod
     def fetch_cisa_kev():
-        """Download CISA Known Exploited Vulnerabilities and save to DB/JSON"""
+        """Download CISA Known Exploited Vulnerabilities and save to DB/JSON."""
         url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
         count = 0
         try:
@@ -264,7 +278,7 @@ class ThreatIntelligence:
             if response and response.status_code == 200:
                 kev_data = response.json()
                 vulnerabilities = kev_data.get("vulnerabilities", [])
-                for vuln in vulnerabilities:
+                for vuln in tqdm(vulnerabilities, desc="CISA KEV", unit="cve"):
                     cve_id = vuln.get("cveID")
                     description = (
                         vuln.get("vendorProject", "") + " " +
@@ -281,9 +295,9 @@ class ThreatIntelligence:
                     )
                     count += 1
             else:
-                logging.error("❌ Failed to download CISA KEV vulnerabilities.")
+                logging.error("Failed to download CISA KEV vulnerabilities.")
         except Exception as e:
-            logging.error(f"❌ Error fetching CISA KEV: {e}")
+            logging.error(f"Error fetching CISA KEV: {e}")
         return count
 
 if __name__ == "__main__":
